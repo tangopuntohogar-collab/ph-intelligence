@@ -1,26 +1,96 @@
 @import "tailwindcss";
 
+/* ── Paleta oficial Punto Hogar ─────────────────────────────────────────────── */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  /* Principales */
+  --color-primary:          #553278;
+  --color-primary-dark:     #3D2158;
+  --color-primary-light:    #7A52A0;
+
+  --color-secondary:        #00A099;
+  --color-secondary-dark:   #007A74;
+  --color-secondary-light:  #33B8B2;
+
+  --color-accent:           #FCC81F;
+
+  /* Neutros */
+  --color-text-primary:     #3D3D3D;
+  --color-text-muted:       #939393;
+  --color-white:            #FFFFFF;
+  --color-bg:               #F5F5F5;
+  --color-border:           #E0E0E0;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+/* ── Tailwind v4: exponer colores como utilidades ────────────────────────────── */
+@theme {
+  --color-primary:          #553278;
+  --color-primary-dark:     #3D2158;
+  --color-primary-light:    #7A52A0;
+
+  --color-secondary:        #00A099;
+  --color-secondary-dark:   #007A74;
+  --color-secondary-light:  #33B8B2;
+
+  --color-accent:           #FCC81F;
+
+  --color-body:             #3D3D3D;
+  --color-muted:            #939393;
+  --color-surface:          #FFFFFF;
+  --color-bg:               #F5F5F5;
+  --color-border:           #E0E0E0;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+* {
+  box-sizing: border-box;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--color-bg);
+  color: var(--color-text-primary);
+  margin: 0;
+  padding: 0;
+}
+
+/* Scrollbar personalizada */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #f1f1f1;
+}
+::-webkit-scrollbar-thumb {
+  background: #ccc;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-primary);
+}
+
+/* Animaciones */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.3s ease-out;
+}
+
+@keyframes pulse-primary {
+  0%, 100% { background-color: var(--color-primary); }
+  50%       { background-color: var(--color-primary-dark); }
+}
+
+/* Skeleton loading */
+@keyframes shimmer {
+  0%   { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+.skeleton {
+  background: linear-gradient(90deg, #e0e0e0 25%, #f0f0f0 50%, #e0e0e0 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+  border-radius: 4px;
 }
