@@ -48,21 +48,24 @@ export async function POST(req: NextRequest) {
     const totals = results.reduce(
       (acc, r) => {
         if (r.status === 'fulfilled') {
-          acc.synced += r.value.synced
-          acc.errors += r.value.errors
-          acc.chatsFound += r.value.chatsFound
+          acc.synced      += r.value.synced
+          acc.errors      += r.value.errors
+          acc.skipped     += r.value.skipped
+          acc.chatsFound  += r.value.chatsFound
+          acc.errorLog.push(...r.value.errorLog)
         } else {
           console.error('[Sync] instancia falló:', r.reason)
         }
         return acc
       },
-      { synced: 0, errors: 0, chatsFound: 0 }
+      { synced: 0, errors: 0, skipped: 0, chatsFound: 0, errorLog: [] as string[] }
     )
 
     return NextResponse.json({
       message: `Sincronización completada`,
       instances: instances.length,
       ...totals,
+      errorLog: totals.errorLog.slice(0, 100),
     })
   } catch (error) {
     console.error('Error en sync:', error)

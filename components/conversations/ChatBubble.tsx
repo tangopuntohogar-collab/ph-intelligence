@@ -1,5 +1,6 @@
 import { Message } from '@/types'
 import { FileText, Headphones, Image as ImageIcon, ExternalLink } from 'lucide-react'
+import { formatMessageDateTime } from '@/lib/utils'
 
 interface ChatBubbleProps {
   message: Message
@@ -9,7 +10,7 @@ interface ChatBubbleProps {
 
 export default function ChatBubble({ message, vendorName, clientName }: ChatBubbleProps) {
   const { from_me, content, type, msg_timestamp, media_url } = message
-  const time = new Date(msg_timestamp).toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' })
+  const time = formatMessageDateTime(msg_timestamp)
 
   const senderLabel = from_me
     ? (vendorName ?? 'Vendedor')
@@ -30,15 +31,22 @@ export default function ChatBubble({ message, vendorName, clientName }: ChatBubb
         }`}
       >
         {type === 'image' && (
-          <div className="flex items-center gap-2 mb-1">
-            <ImageIcon size={14} />
-            <span className="text-xs opacity-70">Imagen</span>
-            {media_url && (
-              <a href={media_url} target="_blank" rel="noopener noreferrer" className="hover:opacity-80">
-                <ExternalLink size={12} />
+          media_url ? (
+            <div className="mb-2">
+              <a href={media_url} target="_blank" rel="noopener noreferrer">
+                <img
+                  src={media_url}
+                  alt="Imagen"
+                  className="max-w-full rounded-lg max-h-72 object-contain cursor-pointer hover:opacity-90 transition-opacity"
+                />
               </a>
-            )}
-          </div>
+            </div>
+          ) : (
+            <div className="flex items-center gap-2 mb-1">
+              <ImageIcon size={14} />
+              <span className="text-xs opacity-70">Imagen</span>
+            </div>
+          )
         )}
         {type === 'audio' && (
           <div className="flex items-center gap-2 mb-1">

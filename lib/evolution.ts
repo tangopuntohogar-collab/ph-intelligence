@@ -35,20 +35,52 @@ export class EvolutionAPIClient {
 
   // Listar conversaciones de la instancia
   async listChats(): Promise<EvolutionChat[]> {
-    try {
-      const data = await this.fetch<unknown>(
-        `/chat/findChats/${this.instanceName}`
-      )
-      // La API puede devolver array directo u objeto con array
-      if (Array.isArray(data)) return data as EvolutionChat[]
-      const arr = (data as { chats?: EvolutionChat[] })?.chats
-      if (Array.isArray(arr)) return arr
-      console.error(`[Evolution] listChats respuesta inesperada para ${this.instanceName}:`, JSON.stringify(data).slice(0, 300))
-      return []
-    } catch (e) {
-      console.error(`[Evolution] listChats error para ${this.instanceName}:`, e)
-      return []
+    // Evolution API v2 usa POST con body vacío; v1 usaba GET sin body.
+    // Intentamos POST primero y hacemos fallback a GET.
+    for (const method of ['POST', 'GET'] as const) {
+      try {
+        const options: RequestInit = { method }
+        if (method === 'POST') {
+          options.body = JSON.stringify({ where: {} })
+        }
+        const data = await this.fetch<unknown>(
+          `/chat/findChats/${this.instanceName}`,
+          options
+        )
+
+        // Normalizamos cualquier formato conocido de la respuesta
+        let arr: unknown[] | null = null
+        if (Array.isArray(data)) {
+          arr = data
+        } else if (typeof data === 'object' && data !== null) {
+          const obj = data as Record<string, unknown>
+          // { chats: [...] }  |  { data: [...] }  |  { records: [...] }
+          for (const key of ['chats', 'data', 'records', 'messages']) {
+            if (Array.isArray(obj[key])) { arr = obj[key] as unknown[]; break }
+          }
+        }
+
+        if (arr !== null) {
+          // Normalizar cada elemento: algunos devuelven `id` en lugar de `remoteJid`
+          return arr.map((c: unknown) => {
+            const chat = c as Record<string, unknown>
+            return {
+              id:          (chat.id ?? chat.remoteJid ?? '') as string,
+              remoteJid:   (chat.remoteJid ?? chat.id ?? '') as string,
+              name:        (chat.name ?? chat.pushName ?? null) as string | null,
+              lastMessage: chat.lastMessage as EvolutionChat['lastMessage'],
+            }
+          }).filter(c => !!c.remoteJid)
+        }
+
+        console.warn(`[Evolution] listChats (${method}) respuesta no reconocida para ${this.instanceName}:`, JSON.stringify(data).slice(0, 300))
+      } catch (e) {
+        // Si POST devuelve 4xx, el fallback GET se ejecutará en la siguiente iteración
+        console.warn(`[Evolution] listChats (${method}) error para ${this.instanceName}:`, e)
+      }
     }
+
+    return []
   }
 
   // Obtener mensajes de una conversación
@@ -112,53 +144,78 @@ export class EvolutionAPIClient {
 }
 
 // ── Servicio de Sincronización ────────────────────────────────────────────────
-export async function syncInstanceConversations(instance: WhatsappInstance): Promise<{
+export async function syncInstanceConversations(
+  instance: WhatsappInstance,
+  daysBack = 30,
+): Promise<{
   synced: number
   errors: number
+  skipped: number
   chatsFound: number
+  errorLog: string[]
 }> {
   const supabase = createServiceSupabaseClient()
   const client = new EvolutionAPIClient(instance)
   let synced = 0
   let errors = 0
+  let skipped = 0
+  const errorLog: string[] = []
 
-  const chats = await client.listChats()
-  console.log(`[Sync] ${instance.instance_name}: ${chats.length} chats encontrados en Evolution API`)
+  const cutoff = Date.now() - daysBack * 24 * 60 * 60 * 1000
+
+  const allChats = await client.listChats()
+  console.log(`[Sync] ${instance.instance_name}: ${allChats.length} chats en Evolution API`)
+
+  // Filtrar: solo individuales y con actividad dentro del período
+  const chats = allChats.filter(chat => {
+    const jid = chat.remoteJid || chat.id
+    if (!jid || jid.endsWith('@g.us')) return false
+    const ts = chat.lastMessage?.messageTimestamp
+    if (!ts) return true // sin timestamp → incluir por las dudas
+    return ts * 1000 >= cutoff
+  })
+
+  skipped = allChats.length - chats.length
+  console.log(`[Sync] ${instance.instance_name}: ${chats.length} dentro de ${daysBack} días (${skipped} omitidos)`)
 
   for (const chat of chats) {
     try {
-      const phone = chat.remoteJid.replace('@s.whatsapp.net', '').replace('@g.us', '')
-      const isGroup = chat.remoteJid.endsWith('@g.us')
-      if (isGroup) continue // Ignorar grupos por ahora
+      const jid = chat.remoteJid || chat.id
+      if (!jid) continue
+      const phone = jid.replace('@s.whatsapp.net', '').replace('@g.us', '')
 
-      // Upsert conversación
+      // Upsert conversación — NO incluimos last_message_at aquí para no
+      // sobreescribir valores correctos con datos incorrectos del campo chat.lastMessage
       const { data: conv, error: convError } = await supabase
         .from('conversations')
         .upsert({
           instance_id: instance.id,
-          remote_jid: chat.remoteJid,
+          remote_jid: jid,
           vendedor_id: instance.vendedor_id,
           client_name: chat.name ?? null,
           client_phone: phone,
-          last_message_at: chat.lastMessage?.messageTimestamp
-            ? new Date(chat.lastMessage.messageTimestamp * 1000).toISOString()
-            : null,
           status: 'active',
         }, { onConflict: 'instance_id,remote_jid' })
         .select()
         .single()
 
       if (convError || !conv) {
-        console.error(`[Sync] Error upsert conversación ${chat.remoteJid}:`, convError?.message)
+        const msg = `${phone}: ${convError?.message ?? 'sin datos'}`
+        console.error(`[Sync] Error upsert ${msg}`)
+        if (errorLog.length < 100) errorLog.push(msg)
         errors++
         continue
       }
 
       // Sincronizar mensajes
-      const messages = await client.getMessages(chat.remoteJid, 100)
+      const messages = await client.getMessages(jid, 100)
+      let maxMsgTs = 0
       for (const msg of messages) {
         const content = extractMessageContent(msg)
         if (!content) continue
+
+        const ts = (msg.messageTimestamp ?? 0) * 1000
+        if (ts > maxMsgTs) maxMsgTs = ts
 
         await supabase.from('messages').upsert({
           conversation_id: conv.id,
@@ -166,15 +223,24 @@ export async function syncInstanceConversations(instance: WhatsappInstance): Pro
           content,
           type: detectMessageType(msg),
           from_me: msg.key.fromMe,
-          msg_timestamp: new Date(msg.messageTimestamp * 1000).toISOString(),
+          msg_timestamp: ts > 0 ? new Date(ts).toISOString() : new Date().toISOString(),
           media_url: extractMediaUrl(msg),
         }, { onConflict: 'external_id', ignoreDuplicates: true })
       }
 
-      console.log(`[Sync] ${instance.instance_name}: conversación ${phone} sincronizada (${messages.length} mensajes)`)
+      // Actualizar last_message_at con el timestamp real del mensaje más reciente
+      if (maxMsgTs > 0) {
+        await supabase
+          .from('conversations')
+          .update({ last_message_at: new Date(maxMsgTs).toISOString() })
+          .eq('id', conv.id)
+      }
+
       synced++
     } catch (e) {
-      console.error(`[Sync] Error procesando chat:`, e)
+      const msg = `${chat.remoteJid || chat.id || '?'}: ${e instanceof Error ? e.message : String(e)}`
+      console.error(`[Sync] Error procesando chat: ${msg}`)
+      if (errorLog.length < 100) errorLog.push(msg)
       errors++
     }
   }
@@ -185,8 +251,8 @@ export async function syncInstanceConversations(instance: WhatsappInstance): Pro
     .update({ last_sync_at: new Date().toISOString() })
     .eq('id', instance.id)
 
-  console.log(`[Sync] ${instance.instance_name}: finalizado — ${synced} sync, ${errors} errores`)
-  return { synced, errors, chatsFound: chats.length }
+  console.log(`[Sync] ${instance.instance_name}: ${synced} ok · ${errors} errores · ${skipped} omitidos`)
+  return { synced, errors, skipped, chatsFound: allChats.length, errorLog }
 }
 
 // ── Helpers para procesar mensajes ────────────────────────────────────────────

@@ -20,6 +20,7 @@ export async function GET(req: NextRequest) {
     const vendorId = searchParams.get('vendorId')
     const status = searchParams.get('status')
     const stage = searchParams.get('stage')
+    const instanceId = searchParams.get('instanceId')
     const page = parseInt(searchParams.get('page') ?? '1')
     const limit = parseInt(searchParams.get('limit') ?? '20')
     const offset = (page - 1) * limit
@@ -48,6 +49,7 @@ export async function GET(req: NextRequest) {
     }
 
     if (status) query = query.eq('status', status)
+    if (instanceId) query = query.eq('instance_id', instanceId)
 
     const { data, error, count } = await query
 
@@ -80,16 +82,20 @@ export async function PATCH(req: NextRequest) {
     }
 
     const body = await req.json()
-    const { id, status } = body
+    const { id, status, display_name } = body
 
     if (!id) {
       return NextResponse.json({ error: 'id es requerido' }, { status: 400 })
     }
 
+    const updates: Record<string, string | null> = {}
+    if (status !== undefined) updates.status = status
+    if (display_name !== undefined) updates.display_name = display_name?.toString().trim() || null
+
     const service = createServiceSupabaseClient()
     const { data, error } = await service
       .from('conversations')
-      .update({ status })
+      .update(updates)
       .eq('id', id)
       .select()
       .single()

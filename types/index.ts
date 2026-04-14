@@ -45,6 +45,7 @@ export interface Conversation {
   created_at: string
   message_count: number
   client_name: string | null
+  display_name: string | null
   client_phone: string
   vendedor?: User
   last_message?: Message

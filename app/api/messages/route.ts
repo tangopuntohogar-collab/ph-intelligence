@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createServerSupabaseClient } from '@/lib/supabase-server'
+import { createServerSupabaseClient, createServiceSupabaseClient } from '@/lib/supabase-server'
 import {
   EvolutionAPIClient,
   extractMessageContent,
@@ -21,14 +21,34 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: 'conversationId requerido' }, { status: 400 })
     }
 
-    // Obtener conversación con su instancia de WhatsApp
-    const { data: conv, error } = await supabase
+    const service = createServiceSupabaseClient()
+
+    // ── 1. Leer mensajes desde Supabase (insertados por N8N) ──────────────────
+    const { data: dbMessages, error: dbError } = await service
+      .from('messages')
+      .select('id, conversation_id, content, type, from_me, msg_timestamp, media_url')
+      .eq('conversation_id', conversationId)
+      .order('msg_timestamp', { ascending: true })
+
+    if (!dbError && dbMessages && dbMessages.length > 0) {
+      // Corregir last_message_at con el timestamp real del último mensaje
+      const latestTs = dbMessages[dbMessages.length - 1].msg_timestamp
+      await service
+        .from('conversations')
+        .update({ last_message_at: latestTs })
+        .eq('id', conversationId)
+
+      return NextResponse.json({ messages: dbMessages, source: 'db' })
+    }
+
+    // ── 2. Fallback: Evolution API (para conversaciones sin mensajes en DB) ───
+    const { data: conv, error: convError } = await supabase
       .from('conversations')
       .select('*, instance:whatsapp_instances(*)')
       .eq('id', conversationId)
       .single()
 
-    if (error || !conv) {
+    if (convError || !conv) {
       return NextResponse.json({ error: 'Conversación no encontrada' }, { status: 404 })
     }
 
@@ -48,14 +68,22 @@ export async function GET(req: NextRequest) {
         content: extractMessageContent(msg),
         type: detectMessageType(msg),
         from_me: msg.key.fromMe,
-        msg_timestamp: new Date(msg.messageTimestamp * 1000).toISOString(),
+        msg_timestamp: new Date((msg.messageTimestamp ?? 0) * 1000).toISOString(),
         media_url: extractMediaUrl(msg) ?? null,
       }))
       .sort((a, b) => new Date(a.msg_timestamp).getTime() - new Date(b.msg_timestamp).getTime())
 
-    return NextResponse.json({ messages })
+    if (messages.length > 0) {
+      const latestTs = messages[messages.length - 1].msg_timestamp
+      await service
+        .from('conversations')
+        .update({ last_message_at: latestTs })
+        .eq('id', conversationId)
+    }
+
+    return NextResponse.json({ messages, source: 'evolution' })
   } catch (error) {
-    console.error('Error fetching messages from Evolution API:', error)
+    console.error('Error fetching messages:', error)
     return NextResponse.json({ error: 'Error interno' }, { status: 500 })
   }
 }

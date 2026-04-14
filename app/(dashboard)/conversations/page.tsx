@@ -7,8 +7,9 @@ import ChatBubble from '@/components/conversations/ChatBubble'
 import ScoreBadge from '@/components/ui/ScoreBadge'
 import { Conversation, Message } from '@/types'
 import { createBrowserSupabaseClient } from '@/lib/supabase'
-import { Search, Filter, Brain, ExternalLink, RefreshCw, X, Loader2, PhoneOff, Users } from 'lucide-react'
-import { STAGE_LABELS } from '@/lib/utils'
+import { Search, Filter, Brain, ExternalLink, RefreshCw, X, Loader2, PhoneOff, Users, ChevronDown, Pencil, Check } from 'lucide-react'
+import { STAGE_LABELS, formatPhone, normalizePhone } from '@/lib/utils'
+import { WhatsappInstance } from '@/types'
 
 export default function ConversationsPage() {
   const searchParams = useSearchParams()
@@ -22,11 +23,19 @@ export default function ConversationsPage() {
   const [search, setSearch] = useState('')
   const [filterStatus, setFilterStatus] = useState(searchParams.get('status') ?? '')
   const [filterStage, setFilterStage] = useState('')
+  const [filterInstance, setFilterInstance] = useState('')
+  const [instances, setInstances] = useState<WhatsappInstance[]>([])
   const [hideEmployeePhones, setHideEmployeePhones] = useState(true)
   const [employeePhones, setEmployeePhones] = useState<Set<string>>(new Set())
-  const [hideGroups, setHideGroups] = useState(true)
+  const [groupsExpanded, setGroupsExpanded] = useState(false)
   const [addingPhone, setAddingPhone] = useState(false)
   const [addPhoneMsg, setAddPhoneMsg] = useState<{ type: 'ok' | 'error' | 'exists'; text: string } | null>(null)
+  const [codClienteMap, setCodClienteMap] = useState<Record<string, string>>({})
+
+  // Edición de nombre en el header
+  const [editingName, setEditingName] = useState(false)
+  const [editNameValue, setEditNameValue] = useState('')
+  const [savingName, setSavingName] = useState(false)
 
   const supabase = createBrowserSupabaseClient()
 
@@ -35,25 +44,38 @@ export default function ConversationsPage() {
     const params = new URLSearchParams()
     if (filterStatus) params.set('status', filterStatus)
     if (filterStage) params.set('stage', filterStage)
+    if (filterInstance) params.set('instanceId', filterInstance)
     params.set('limit', '50')
 
     const res = await fetch(`/api/conversations?${params}`)
     const data = await res.json()
     setConversations(data.data ?? [])
     setLoading(false)
-  }, [filterStatus, filterStage])
+  }, [filterStatus, filterStage, filterInstance])
 
   useEffect(() => {
     loadConversations()
   }, [loadConversations])
 
-  // Cargar teléfonos de empleados una sola vez al montar
+  // Cargar datos auxiliares una sola vez al montar
   useEffect(() => {
     fetch('/api/employee-phones')
       .then(r => r.json())
       .then(d => {
         const phones = (d.data ?? []).map((p: { phone: string }) => p.phone)
         setEmployeePhones(new Set(phones))
+      })
+
+    fetch('/api/base-tn/lookup')
+      .then(r => r.json())
+      .then(d => {
+        if (d.data) setCodClienteMap(d.data)
+      })
+
+    fetch('/api/instances')
+      .then(r => r.json())
+      .then(d => {
+        setInstances(d.data ?? [])
       })
   }, [])
 
@@ -83,6 +105,7 @@ export default function ConversationsPage() {
   const selectConversation = async (conv: Conversation) => {
     setSelected(conv)
     setMessages([])
+    setEditingName(false)
     setLoadingMessages(true)
     try {
       const res = await fetch(`/api/messages?conversationId=${conv.id}`)
@@ -111,19 +134,53 @@ export default function ConversationsPage() {
     }
   }
 
-  const groupCount = conversations.filter(c => c.remote_jid?.endsWith('@g.us')).length
+  const handleSaveName = async (conversationId: string, displayName: string | null) => {
+    const res = await fetch('/api/conversations', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: conversationId, display_name: displayName }),
+    })
+    if (res.ok) {
+      setConversations(prev => prev.map(c =>
+        c.id === conversationId ? { ...c, display_name: displayName } : c
+      ))
+      setSelected(prev => prev?.id === conversationId ? { ...prev, display_name: displayName } : prev)
+    }
+  }
 
-  const filteredConversations = conversations.filter(c => {
-    if (hideGroups && c.remote_jid?.endsWith('@g.us')) return false
-    if (hideEmployeePhones && employeePhones.has(c.client_phone)) return false
+  const handleSaveHeaderName = async () => {
+    if (!selected) return
+    setSavingName(true)
+    await handleSaveName(selected.id, editNameValue.trim() || null)
+    setSavingName(false)
+    setEditingName(false)
+  }
+
+  const isGroup = (c: Conversation) => c.remote_jid?.endsWith('@g.us') ?? false
+
+  const matchesSearch = (c: Conversation) => {
     if (!search) return true
     const q = search.toLowerCase()
+    const name = c.display_name ?? c.client_name ?? ''
     return (
-      (c.client_name ?? '').toLowerCase().includes(q) ||
+      name.toLowerCase().includes(q) ||
       c.client_phone.toLowerCase().includes(q) ||
       (c.vendedor?.full_name ?? '').toLowerCase().includes(q)
     )
-  })
+  }
+
+  const getCodCliente = (phone: string) => {
+    const norm = normalizePhone(phone)
+    return codClienteMap[norm]
+  }
+
+  const individualConvs = conversations.filter(c =>
+    !isGroup(c) &&
+    !(hideEmployeePhones && employeePhones.has(c.client_phone)) &&
+    matchesSearch(c)
+  )
+
+  const groupConvs = conversations.filter(c => isGroup(c) && matchesSearch(c))
 
   const handleAddEmployeePhone = async () => {
     if (!selected) return
@@ -163,6 +220,10 @@ export default function ConversationsPage() {
   const latestAnalysis = selected
     ? (Array.isArray(selected.ai_analysis) ? selected.ai_analysis[0] : selected.ai_analysis)
     : null
+
+  const selectedDisplayName = selected
+    ? (selected.display_name ?? selected.client_name ?? selected.client_phone)
+    : ''
 
   return (
     <div className="flex h-full">
@@ -205,21 +266,19 @@ export default function ConversationsPage() {
             </select>
           </div>
 
-          {/* Toggle: ocultar grupos */}
-          {groupCount > 0 && (
-            <button
-              onClick={() => setHideGroups(v => !v)}
-              className={`flex items-center gap-1.5 w-full px-2.5 py-1.5 rounded-md text-xs font-medium border transition-colors ${
-                hideGroups
-                  ? 'bg-blue-50 border-blue-200 text-blue-600'
-                  : 'bg-bg border-border text-gray-500 hover:border-blue-200 hover:text-blue-600'
-              }`}
+          {instances.length > 1 && (
+            <select
+              value={filterInstance}
+              onChange={e => setFilterInstance(e.target.value)}
+              className="w-full text-xs border border-border rounded-md px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-primary"
             >
-              <Users size={11} />
-              {hideGroups
-                ? `Ocultando ${groupCount} grupo${groupCount !== 1 ? 's' : ''}`
-                : 'Mostrando todos (incl. grupos)'}
-            </button>
+              <option value="">Todas las instancias</option>
+              {instances.map(inst => (
+                <option key={inst.id} value={inst.id}>
+                  {inst.instance_name}{inst.phone_number ? ` (${inst.phone_number})` : ''}
+                </option>
+              ))}
+            </select>
           )}
 
           {/* Toggle: ocultar teléfonos de empleados */}
@@ -244,19 +303,55 @@ export default function ConversationsPage() {
         <div className="flex-1 overflow-y-auto">
           {loading ? (
             <div className="p-4 text-center text-gray-400 text-sm">Cargando...</div>
-          ) : filteredConversations.length === 0 ? (
+          ) : individualConvs.length === 0 && groupConvs.length === 0 ? (
             <div className="p-4 text-center text-gray-400 text-sm">
               No se encontraron conversaciones
             </div>
           ) : (
-            filteredConversations.map(conv => (
-              <ConversationCard
-                key={conv.id}
-                conversation={conv}
-                onClick={() => selectConversation(conv)}
-                selected={selected?.id === conv.id}
-              />
-            ))
+            <>
+              {/* Conversaciones individuales */}
+              {individualConvs.map(conv => (
+                <ConversationCard
+                  key={conv.id}
+                  conversation={conv}
+                  onClick={() => selectConversation(conv)}
+                  selected={selected?.id === conv.id}
+                  codCliente={getCodCliente(conv.client_phone)}
+                  onSaveName={handleSaveName}
+                />
+              ))}
+
+              {/* Sección Grupos internos — colapsable, una sola entrada */}
+              {groupConvs.length > 0 && (
+                <div className="border-t border-border">
+                  <button
+                    onClick={() => setGroupsExpanded(v => !v)}
+                    className="flex items-center justify-between w-full px-4 py-2.5 bg-blue-50 hover:bg-blue-100 transition-colors text-left"
+                  >
+                    <span className="flex items-center gap-2 text-xs font-semibold text-blue-700">
+                      <Users size={13} />
+                      Grupos internos
+                      <span className="bg-blue-200 text-blue-800 px-1.5 py-0.5 rounded-full text-[10px]">
+                        {groupConvs.length}
+                      </span>
+                    </span>
+                    <ChevronDown
+                      size={13}
+                      className={`text-blue-500 transition-transform ${groupsExpanded ? 'rotate-180' : ''}`}
+                    />
+                  </button>
+
+                  {groupsExpanded && groupConvs.map(conv => (
+                    <ConversationCard
+                      key={conv.id}
+                      conversation={conv}
+                      onClick={() => selectConversation(conv)}
+                      selected={selected?.id === conv.id}
+                    />
+                  ))}
+                </div>
+              )}
+            </>
           )}
         </div>
       </div>
@@ -272,15 +367,60 @@ export default function ConversationsPage() {
           <>
             {/* Header del chat */}
             <div className="bg-surface border-b border-border px-5 py-3 flex items-center justify-between">
-              <div>
-                <h3 className="font-semibold text-body">
-                  {selected.client_name ?? selected.client_phone}
-                </h3>
-                <p className="text-xs text-gray-500">
-                  {selected.client_phone} · {selected.vendedor?.full_name ?? '—'} · {selected.message_count} mensajes
+              <div className="min-w-0 mr-4">
+                {/* Nombre editable */}
+                {editingName ? (
+                  <div className="flex items-center gap-1.5">
+                    <input
+                      autoFocus
+                      type="text"
+                      value={editNameValue}
+                      onChange={e => setEditNameValue(e.target.value)}
+                      onKeyDown={e => {
+                        if (e.key === 'Enter') handleSaveHeaderName()
+                        if (e.key === 'Escape') setEditingName(false)
+                      }}
+                      className="text-sm font-semibold border border-primary rounded px-2 py-0.5 focus:outline-none focus:ring-1 focus:ring-primary min-w-0"
+                      placeholder="Nombre del cliente"
+                    />
+                    <button
+                      onClick={handleSaveHeaderName}
+                      disabled={savingName}
+                      className="text-green-600 hover:text-green-700 disabled:opacity-50"
+                    >
+                      {savingName ? <Loader2 size={13} className="animate-spin" /> : <Check size={13} />}
+                    </button>
+                    <button onClick={() => setEditingName(false)} className="text-gray-400 hover:text-gray-600">
+                      <X size={13} />
+                    </button>
+                  </div>
+                ) : (
+                  <div className="group/hname flex items-center gap-1.5 min-w-0">
+                    <h3 className="font-semibold text-body truncate">{selectedDisplayName}</h3>
+                    <button
+                      onClick={() => {
+                        setEditNameValue(selected.display_name ?? selected.client_name ?? '')
+                        setEditingName(true)
+                      }}
+                      className="shrink-0 opacity-0 group-hover/hname:opacity-100 text-gray-300 hover:text-primary transition-opacity"
+                    >
+                      <Pencil size={12} />
+                    </button>
+                  </div>
+                )}
+                {/* Nombre original si hay display_name */}
+                {selected.display_name && selected.client_name && selected.display_name !== selected.client_name && (
+                  <p className="text-[10px] text-gray-400 leading-tight">{selected.client_name}</p>
+                )}
+                <p className="text-xs text-gray-500 mt-0.5">
+                  {formatPhone(selected.client_phone)}
+                  {getCodCliente(selected.client_phone) && (
+                    <span className="ml-1.5 text-primary font-medium">#{getCodCliente(selected.client_phone)}</span>
+                  )}
+                  {' · '}{selected.vendedor?.full_name ?? '—'} · {selected.message_count} mensajes
                 </p>
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 shrink-0">
                 {latestAnalysis ? (
                   <div className="flex items-center gap-2">
                     <ScoreBadge score={(latestAnalysis as { quality_score: number }).quality_score} size="sm" />
@@ -329,14 +469,14 @@ export default function ConversationsPage() {
                       ? <Loader2 size={11} className="animate-spin" />
                       : <PhoneOff size={11} />
                     }
-                    {employeePhones.has(selected.client_phone) ? 'Empleado' : 'Empleado'}
+                    Empleado
                   </button>
                 </div>
 
                 <button onClick={() => selectConversation(selected)} className="text-muted hover:text-body">
                   <RefreshCw size={14} />
                 </button>
-                <button onClick={() => { setSelected(null); setAddPhoneMsg(null) }} className="text-muted hover:text-body">
+                <button onClick={() => { setSelected(null); setAddPhoneMsg(null); setEditingName(false) }} className="text-muted hover:text-body">
                   <X size={16} />
                 </button>
               </div>
@@ -357,7 +497,7 @@ export default function ConversationsPage() {
                     key={msg.id}
                     message={msg}
                     vendorName={selected.vendedor?.full_name}
-                    clientName={selected.client_name ?? selected.client_phone}
+                    clientName={selectedDisplayName}
                   />
                 ))
               )}

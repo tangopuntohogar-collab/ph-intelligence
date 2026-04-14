@@ -21,9 +21,16 @@ export default function PipelinePage() {
   const [filterVendor, setFilterVendor] = useState('')
   const [loading, setLoading] = useState(true)
   const [dragging, setDragging] = useState<string | null>(null)
+  const [employeePhones, setEmployeePhones] = useState<Set<string>>(new Set())
 
   useEffect(() => {
     loadData()
+    fetch('/api/employee-phones')
+      .then(r => r.json())
+      .then(d => {
+        const phones = (d.data ?? []).map((p: { phone: string }) => p.phone)
+        setEmployeePhones(new Set(phones))
+      })
   }, [])
 
   const loadData = async () => {
@@ -36,7 +43,8 @@ export default function PipelinePage() {
         .limit(200),
       fetch('/api/vendors').then(r => r.json()),
     ])
-    setConversations((convsRes.data ?? []) as ConvWithAnalysis[])
+    const allConvs = (convsRes.data ?? []) as ConvWithAnalysis[]
+    setConversations(allConvs.filter(c => !c.remote_jid?.endsWith('@g.us')))
     setVendors(vendorsRes.data ?? [])
     setLoading(false)
   }
@@ -65,7 +73,8 @@ export default function PipelinePage() {
         const cStage = c.ai_analysis?.[0]?.conversation_stage
         const matchStage = cStage === stage || (stage === 'new' && !cStage)
         const matchVendor = !filterVendor || c.vendedor_id === filterVendor
-        return matchStage && matchVendor
+        const isEmployee = employeePhones.has(c.client_phone)
+        return matchStage && matchVendor && !isEmployee
       })
   }
 
@@ -139,7 +148,7 @@ export default function PipelinePage() {
                     >
                       <div className="flex items-start justify-between gap-2 mb-2">
                         <p className="text-sm font-medium text-body leading-tight truncate">
-                          {conv.client_name ?? conv.client_phone}
+                          {conv.display_name ?? conv.client_name ?? conv.client_phone}
                         </p>
                         {conv.ai_analysis?.[0]?.quality_score > 0 && (
                           <ScoreBadge score={conv.ai_analysis[0].quality_score} size="sm" />
