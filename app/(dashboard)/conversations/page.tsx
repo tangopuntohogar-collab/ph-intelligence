@@ -20,6 +20,8 @@ export default function ConversationsPage() {
   const [loading, setLoading] = useState(true)
   const [loadingMessages, setLoadingMessages] = useState(false)
   const [analyzing, setAnalyzing] = useState(false)
+  const [analyzeError, setAnalyzeError] = useState<string | null>(null)
+  const [loadingReport, setLoadingReport] = useState(false)
   const [search, setSearch] = useState('')
   const [filterStatus, setFilterStatus] = useState(searchParams.get('status') ?? '')
   const [filterStage, setFilterStage] = useState('')
@@ -119,6 +121,7 @@ export default function ConversationsPage() {
   const handleAnalyze = async () => {
     if (!selected) return
     setAnalyzing(true)
+    setAnalyzeError(null)
     try {
       const res = await fetch('/api/analyze/conversation', {
         method: 'POST',
@@ -128,7 +131,14 @@ export default function ConversationsPage() {
       const data = await res.json()
       if (data.analysisId) {
         router.push(`/analysis/${data.analysisId}`)
+      } else {
+        const msg = data.error ?? 'No se pudo generar el análisis'
+        setAnalyzeError(msg)
+        setTimeout(() => setAnalyzeError(null), 8000)
       }
+    } catch {
+      setAnalyzeError('Error de conexión al analizar')
+      setTimeout(() => setAnalyzeError(null), 8000)
     } finally {
       setAnalyzing(false)
     }
@@ -425,21 +435,35 @@ export default function ConversationsPage() {
                   <div className="flex items-center gap-2">
                     <ScoreBadge score={(latestAnalysis as { quality_score: number }).quality_score} size="sm" />
                     <button
-                      onClick={() => router.push(`/analysis/${(latestAnalysis as { id: string }).id}`)}
-                      className="text-xs text-primary hover:text-primary-dark font-medium flex items-center gap-1"
+                      onClick={async () => {
+                        setLoadingReport(true)
+                        await router.push(`/analysis/${(latestAnalysis as { id: string }).id}`)
+                        setLoadingReport(false)
+                      }}
+                      disabled={loadingReport}
+                      className="text-xs text-primary hover:text-primary-dark font-medium flex items-center gap-1 disabled:opacity-50"
                     >
-                      Ver informe <ExternalLink size={12} />
+                      {loadingReport ? (
+                        <><Loader2 size={12} className="animate-spin" /> Cargando informe...</>
+                      ) : (
+                        <>Ver informe <ExternalLink size={12} /></>
+                      )}
                     </button>
                   </div>
                 ) : null}
-                <button
-                  onClick={handleAnalyze}
-                  disabled={analyzing}
-                  className="flex items-center gap-1.5 bg-primary hover:bg-primary-dark text-white text-xs font-semibold px-3 py-2 rounded-md transition-colors disabled:opacity-50"
-                >
-                  <Brain size={14} />
-                  {analyzing ? 'Analizando...' : latestAnalysis ? 'Re-analizar con IA' : '🤖 Analizar con IA'}
-                </button>
+                <div className="flex flex-col items-start gap-1">
+                  <button
+                    onClick={handleAnalyze}
+                    disabled={analyzing}
+                    className="flex items-center gap-1.5 bg-primary hover:bg-primary-dark text-white text-xs font-semibold px-3 py-2 rounded-md transition-colors disabled:opacity-50"
+                  >
+                    <Brain size={14} />
+                    {analyzing ? 'Analizando...' : latestAnalysis ? 'Re-analizar con IA' : '🤖 Analizar con IA'}
+                  </button>
+                  {analyzeError && (
+                    <span className="text-xs text-red-500 font-medium">{analyzeError}</span>
+                  )}
+                </div>
                 {/* Agregar a empleados */}
                 <div className="flex items-center gap-1.5">
                   {addPhoneMsg && (

@@ -7,7 +7,7 @@ export type AIProvider = 'anthropic' | 'gemini'
 // Modelos por proveedor
 export const AI_MODELS: Record<AIProvider, string> = {
   anthropic: 'claude-sonnet-4-20250514',
-  gemini: 'gemini-2.5-flash-preview-04-17',
+  gemini: 'gemini-flash-latest',
 }
 
 // ── Obtener proveedor activo desde Supabase ───────────────────────────────────
@@ -27,10 +27,10 @@ export async function getActiveProvider(): Promise<AIProvider> {
     // fallback a env var si falla Supabase
   }
 
-  // Fallback: variable de entorno o anthropic por defecto
+  // Fallback: variable de entorno o gemini por defecto
   const envProvider = process.env.AI_PROVIDER
   if (envProvider === 'gemini' || envProvider === 'anthropic') return envProvider
-  return 'anthropic'
+  return 'gemini'
 }
 
 // ── Cambiar proveedor activo ───────────────────────────────────────────────────
